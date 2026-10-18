@@ -1,9 +1,10 @@
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -11,17 +12,41 @@ from sqlalchemy.orm import Session
 from database import create_tables, get_db
 from models import CheckResult, Monitor
 from monitor import check_website
+from scheduler import scheduler
 
 
-app = FastAPI(title="Sentinel API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_tables()
 
-# Create missing database tables during startup.
-create_tables()
+    if not scheduler.running:
+        scheduler.start()
+
+    print("[Sentinel] Automatic monitoring started")
+
+    try:
+        yield
+    finally:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+            print("[Sentinel] Automatic monitoring stopped")
+
+
+app = FastAPI(
+    title="Sentinel API",
+    description="Website monitoring and uptime history API",
+    lifespan=lifespan,
+)
 
 
 class MonitorCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=100)
     url: HttpUrl
+    check_interval_seconds: int = Field(
+        default=60,
+        ge=30,
+        le=86400,
+    )
 
 
 def serialize_monitor(monitor: Monitor) -> dict:
@@ -29,6 +54,7 @@ def serialize_monitor(monitor: Monitor) -> dict:
         "id": monitor.id,
         "name": monitor.name,
         "url": monitor.url,
+        "check_interval_seconds": monitor.check_interval_seconds,
         "created_at": monitor.created_at.isoformat(),
     }
 
@@ -107,6 +133,7 @@ def create_monitor(
         id=str(uuid4()),
         name=monitor.name,
         url=url,
+        check_interval_seconds=monitor.check_interval_seconds,
         created_at=datetime.now(timezone.utc),
     )
 
@@ -146,10 +173,8 @@ def check_monitor(
             detail="Monitor not found",
         )
 
-    # Perform the website check.
     result = check_website(monitor.url)
 
-    # Persist the result in PostgreSQL.
     try:
         saved_result = save_check_result(monitor, result, db)
     except Exception:
@@ -210,7 +235,6 @@ def delete_monitor(
             detail="Monitor not found",
         )
 
-    # Delete history explicitly before deleting the monitor.
     db.execute(
         delete(CheckResult).where(
             CheckResult.monitor_id == monitor_id
