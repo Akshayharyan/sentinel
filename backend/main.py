@@ -199,12 +199,13 @@ def signup(payload: SignupRequest, response: Response, db: Session = Depends(get
     db.commit()
     db.refresh(user)
     response.set_cookie(
-        SESSION_COOKIE,
-        create_session_token(user.id),
+        key=SESSION_COOKIE,
+        value=create_session_token(user.id),
         max_age=SESSION_MAX_AGE,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        samesite="none",
+        secure=True,
+        path="/",
     )
     return serialize_user(user)
 
@@ -218,19 +219,21 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     response.set_cookie(
-        SESSION_COOKIE,
-        create_session_token(user.id),
+        key=SESSION_COOKIE,
+        value=create_session_token(user.id),
         max_age=SESSION_MAX_AGE,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        samesite="none",
+        secure=True,
+        path="/",
     )
+
     return serialize_user(user)
 
 
 @app.post("/auth/logout", status_code=204)
 def logout(response: Response):
-    response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(SESSION_COOKIE, path="/")
 
 
 @app.get("/auth/me")
