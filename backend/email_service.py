@@ -11,7 +11,11 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
-def send_alert_email(subject: str, body: str) -> None:
+def send_alert_email(
+    subject: str,
+    body: str,
+    recipient: str | None = None,
+) -> None:
     """Send a Sentinel alert email through Brevo SMTP."""
 
     host = os.getenv("SMTP_HOST", "smtp-relay.brevo.com")
@@ -19,7 +23,7 @@ def send_alert_email(subject: str, body: str) -> None:
     login = os.getenv("SMTP_LOGIN")
     password = os.getenv("SMTP_KEY")
     sender = os.getenv("ALERT_FROM_EMAIL")
-    recipient = os.getenv("ALERT_TO_EMAIL")
+    recipient = recipient or os.getenv("ALERT_TO_EMAIL")
 
     required = {
         "SMTP_LOGIN": login,

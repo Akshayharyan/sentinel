@@ -9,14 +9,18 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
 
 
 class Monitor(Base):
     __tablename__ = "monitors"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "url", name="uq_monitor_owner_url"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -30,8 +34,14 @@ class Monitor(Base):
 
     url: Mapped[str] = mapped_column(
         String(2048),
-        unique=True,
         nullable=False,
+        index=True,
+    )
+
+    owner_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
 
@@ -46,6 +56,35 @@ class Monitor(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
+    )
+
+    owner: Mapped["User | None"] = relationship(back_populates="monitors")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    email: Mapped[str] = mapped_column(
+        String(320),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+    password_hash: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    monitors: Mapped[list[Monitor]] = relationship(
+        back_populates="owner",
+        cascade="all, delete-orphan",
     )
 
 

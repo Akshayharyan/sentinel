@@ -51,8 +51,10 @@ def notify_transition(monitor, event, result):
     else:
         return
 
+    recipient = monitor.owner.email if monitor.owner else None
+
     try:
-        send_alert_email(subject, body)
+        send_alert_email(subject, body, recipient=recipient)
     except Exception as error:
         # Email failure must not interrupt website monitoring.
         print(

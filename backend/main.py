@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, HttpUrl
 from sqlalchemy import delete, func, select
@@ -11,7 +11,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import create_tables, get_db
-from models import CheckResult, Monitor
+from auth import (
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
+    create_session_token,
+    hash_password,
+    read_session_user_id,
+    verify_password,
+)
+from models import CheckResult, Monitor, User
 from monitor import check_website
 from scheduler import scheduler
 
@@ -60,6 +68,60 @@ class MonitorCreate(BaseModel):
         ge=30,
         le=86400,
     )
+
+
+class SignupRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=128)
+    password_confirmation: str = Field(min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=128)
+
+
+def normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def serialize_user(user: User) -> dict:
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+    }
+
+
+def get_current_user(
+    session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    db: Session = Depends(get_db),
+) -> User:
+    user_id = read_session_user_id(session)
+    user = db.get(User, user_id) if user_id else None
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+        )
+    return user
+
+
+def owned_monitor(
+    monitor_id: str,
+    user: User,
+    db: Session,
+) -> Monitor:
+    monitor = db.scalar(
+        select(Monitor).where(
+            Monitor.id == monitor_id,
+            Monitor.owner_id == user.id,
+        )
+    )
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+    return monitor
 
 
 def serialize_monitor(monitor: Monitor) -> dict:
@@ -119,6 +181,64 @@ def health_check():
     return {"status": "healthy"}
 
 
+@app.post("/auth/signup", status_code=201)
+def signup(payload: SignupRequest, response: Response, db: Session = Depends(get_db)):
+    email = normalize_email(payload.email)
+    if payload.password != payload.password_confirmation:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+
+    if db.scalar(select(User).where(User.email == email)):
+        raise HTTPException(status_code=409, detail="Email is already registered")
+
+    user = User(
+        id=str(uuid4()),
+        name=payload.name.strip(),
+        email=email,
+        password_hash=hash_password(payload.password),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    response.set_cookie(
+        SESSION_COOKIE,
+        create_session_token(user.id),
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+    )
+    return serialize_user(user)
+
+
+@app.post("/auth/login")
+def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
+    user = db.scalar(
+        select(User).where(User.email == normalize_email(payload.email))
+    )
+    if user is None or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    response.set_cookie(
+        SESSION_COOKIE,
+        create_session_token(user.id),
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+    )
+    return serialize_user(user)
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(response: Response):
+    response.delete_cookie(SESSION_COOKIE)
+
+
+@app.get("/auth/me")
+def current_user(user: User = Depends(get_current_user)):
+    return serialize_user(user)
+
+
 # Ad-hoc check. Does not save history.
 @app.get("/check")
 def check(url: HttpUrl):
@@ -128,12 +248,16 @@ def check(url: HttpUrl):
 @app.post("/monitors", status_code=201)
 def create_monitor(
     monitor: MonitorCreate,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     url = str(monitor.url)
 
     existing = db.scalar(
-        select(Monitor).where(Monitor.url == url)
+        select(Monitor).where(
+            Monitor.owner_id == user.id,
+            Monitor.url == url,
+        )
     )
 
     if existing:
@@ -147,6 +271,7 @@ def create_monitor(
         name=monitor.name,
         url=url,
         check_interval_seconds=monitor.check_interval_seconds,
+        owner_id=user.id,
         created_at=datetime.now(timezone.utc),
     )
 
@@ -165,9 +290,14 @@ def create_monitor(
 
 
 @app.get("/monitors")
-def list_monitors(db: Session = Depends(get_db)):
+def list_monitors(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     records = db.scalars(
-        select(Monitor).order_by(Monitor.created_at.desc())
+        select(Monitor)
+        .where(Monitor.owner_id == user.id)
+        .order_by(Monitor.created_at.desc())
     ).all()
 
     return [serialize_monitor(item) for item in records]
@@ -175,9 +305,14 @@ def list_monitors(db: Session = Depends(get_db)):
 
 # Summary of every monitor and its latest recorded check.
 @app.get("/monitors/status")
-def get_all_monitor_status(db: Session = Depends(get_db)):
+def get_all_monitor_status(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     monitors = db.scalars(
-        select(Monitor).order_by(Monitor.created_at.desc())
+        select(Monitor)
+        .where(Monitor.owner_id == user.id)
+        .order_by(Monitor.created_at.desc())
     ).all()
 
     summaries = []
@@ -232,6 +367,7 @@ def get_all_monitor_status(db: Session = Depends(get_db)):
 def get_monitor_stats(
     monitor_id: str,
     hours: int = 24,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if hours < 1 or hours > 720:
@@ -240,13 +376,7 @@ def get_monitor_stats(
             detail="Hours must be between 1 and 720",
         )
 
-    monitor = db.get(Monitor, monitor_id)
-
-    if monitor is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Monitor not found",
-        )
+    monitor = owned_monitor(monitor_id, user, db)
 
     cutoff_time = datetime.now(timezone.utc) - timedelta(
         hours=hours
@@ -298,15 +428,10 @@ def get_monitor_stats(
 def get_monitor_history(
     monitor_id: str,
     limit: int = 50,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    monitor = db.get(Monitor, monitor_id)
-
-    if monitor is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Monitor not found",
-        )
+    monitor = owned_monitor(monitor_id, user, db)
 
     if limit < 1 or limit > 500:
         raise HTTPException(
@@ -333,15 +458,10 @@ def get_monitor_history(
 @app.post("/monitors/{monitor_id}/check")
 def check_monitor(
     monitor_id: str,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    monitor = db.get(Monitor, monitor_id)
-
-    if monitor is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Monitor not found",
-        )
+    monitor = owned_monitor(monitor_id, user, db)
 
     result = check_website(monitor.url)
 
@@ -360,15 +480,10 @@ def check_monitor(
 @app.delete("/monitors/{monitor_id}")
 def delete_monitor(
     monitor_id: str,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    monitor = db.get(Monitor, monitor_id)
-
-    if monitor is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Monitor not found",
-        )
+    monitor = owned_monitor(monitor_id, user, db)
 
     db.execute(
         delete(CheckResult).where(

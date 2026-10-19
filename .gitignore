@@ -12,3 +12,24 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node.js
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+
+# Local tooling
+.vscode/
