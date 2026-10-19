@@ -1,5 +1,5 @@
-
-const API_BASE_URL = 'http://localhost:8000'
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -22,7 +22,6 @@ async function request(path, options = {}) {
       } else if (data.detail) {
         message = JSON.stringify(data.detail)
       }
-
     } catch {
       // Keep the default error message if the response is not JSON.
     }
@@ -37,6 +36,7 @@ async function request(path, options = {}) {
   return response.json()
 }
 
+// Authentication
 export const signup = (payload) =>
   request('/auth/signup', {
     method: 'POST',
@@ -56,42 +56,38 @@ export const logout = () =>
 
 export const getCurrentUser = () => request('/auth/me')
 
-// Get all registered monitors.
+// Monitors
 export const getMonitors = () => request('/monitors')
 
-// Get the latest status and check count for every monitor.
 export const getMonitorStatus = () =>
   request('/monitors/status')
 
-// Create a new website monitor.
 export const createMonitor = (monitor) =>
   request('/monitors', {
     method: 'POST',
     body: JSON.stringify(monitor),
   })
 
-// Delete a monitor.
 export const deleteMonitor = (monitorId) =>
   request(`/monitors/${encodeURIComponent(monitorId)}`, {
     method: 'DELETE',
   })
 
-// Manually check a website immediately.
+// Manually check a website immediately
 export const checkMonitor = (monitorId) =>
-  request(
-    `/monitors/${encodeURIComponent(monitorId)}/check`,
-    { method: 'POST' }
-  )
+  request(`/monitors/${encodeURIComponent(monitorId)}/check`, {
+    method: 'POST',
+  })
 
-// Get the recent check history for a monitor.
+// Monitoring history and statistics
 export const getMonitorHistory = (monitorId) =>
-  request(
-    `/monitors/${encodeURIComponent(monitorId)}/history`
-  )
+  request(`/monitors/${encodeURIComponent(monitorId)}/history`)
 
-// Get uptime, successful/failed checks, and average response time.
 export const getMonitorStats = (monitorId, hours = 24) => {
-  const validHours = Math.max(1, Math.min(8760, Number(hours) || 24))
+  const validHours = Math.max(
+    1,
+    Math.min(8760, Number(hours) || 24)
+  )
 
   return request(
     `/monitors/${encodeURIComponent(monitorId)}/stats?hours=${validHours}`
