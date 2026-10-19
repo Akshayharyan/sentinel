@@ -8,6 +8,8 @@ from sqlalchemy import select
 from database import SessionLocal
 from models import CheckResult, Monitor
 from monitor import check_website
+from alert_logic import detect_transition
+from email_service import send_alert_email
 
 
 def get_recent_checks(db, monitor_id, limit=2):
@@ -20,6 +22,45 @@ def get_recent_checks(db, monitor_id, limit=2):
     ).all()
 
 
+def notify_transition(monitor, event, result):
+    """Send an email for a new downtime or recovery event."""
+    if event == "DOWN":
+        subject = f"[Sentinel] Website DOWN: {monitor.name}"
+        body = (
+            f"Sentinel has detected downtime.\n\n"
+            f"Monitor: {monitor.name}\n"
+            f"URL: {monitor.url}\n"
+            f"Status: DOWN\n"
+            f"HTTP status: {result.get('status_code')}\n"
+            f"Error: {result.get('error', 'No details available')}\n\n"
+            f"The website failed two consecutive checks.\n"
+        )
+
+    elif event == "RECOVERED":
+        subject = f"[Sentinel] Website RECOVERED: {monitor.name}"
+        body = (
+            f"Sentinel has detected that the website has recovered.\n\n"
+            f"Monitor: {monitor.name}\n"
+            f"URL: {monitor.url}\n"
+            f"Status: UP\n"
+            f"HTTP status: {result.get('status_code')}\n"
+            f"Response time: {result['response_time_ms']:.2f} ms\n\n"
+            f"The website is responding successfully again.\n"
+        )
+
+    else:
+        return
+
+    try:
+        send_alert_email(subject, body)
+    except Exception as error:
+        # Email failure must not interrupt website monitoring.
+        print(
+            f"[Sentinel] Failed to send {event} email "
+            f"for {monitor.url}: {error}"
+        )
+
+
 def run_due_checks():
     """Check registered monitors and detect downtime or recovery."""
     db = SessionLocal()
@@ -29,6 +70,7 @@ def run_due_checks():
 
         for monitor in monitors:
             try:
+                # Read previous results before recording this check.
                 recent_checks = get_recent_checks(db, monitor.id)
 
                 latest_check = (
@@ -58,16 +100,10 @@ def run_due_checks():
                     if now < next_due:
                         continue
 
-                # A monitor is considered DOWN only after
-                # two consecutive failed recorded checks.
-                was_down = (
-                    len(recent_checks) >= 2
-                    and not recent_checks[0].is_up
-                    and not recent_checks[1].is_up
-                )
-
+                # Check the website.
                 result = check_website(monitor.url)
 
+                # Save the result before processing notifications.
                 record = CheckResult(
                     id=str(uuid4()),
                     monitor_id=monitor.id,
@@ -86,25 +122,29 @@ def run_due_checks():
                     f"[Sentinel] Checked {monitor.url}: {status}"
                 )
 
-                # Detect transitions without repeating alerts
-                # for an outage that is already confirmed.
-                if not result["is_up"]:
-                    now_down = (
-                        bool(recent_checks)
-                        and not recent_checks[0].is_up
+                # Detect transitions using previous results.
+                previous_is_up = [
+                    check.is_up for check in recent_checks
+                ]
+
+                event = detect_transition(
+                    previous_is_up,
+                    result["is_up"],
+                )
+
+                if event == "DOWN":
+                    print(
+                        f"[Sentinel] DOWNTIME DETECTED: "
+                        f"{monitor.name} ({monitor.url})"
                     )
+                    notify_transition(monitor, event, result)
 
-                    if now_down and not was_down:
-                        print(
-                            f"[Sentinel] DOWNTIME DETECTED: "
-                            f"{monitor.name} ({monitor.url})"
-                        )
-
-                elif was_down:
+                elif event == "RECOVERED":
                     print(
                         f"[Sentinel] RECOVERY DETECTED: "
                         f"{monitor.name} ({monitor.url})"
                     )
+                    notify_transition(monitor, event, result)
 
             except Exception as error:
                 db.rollback()

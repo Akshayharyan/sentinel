@@ -26,7 +26,7 @@ class TestSchedulerIntegration(unittest.TestCase):
             expire_on_commit=False,
         )
 
-        # Add one dedicated test monitor.
+        # Add a dedicated test monitor.
         with self.TestSessionLocal() as db:
             self.monitor_id = str(uuid4())
 
@@ -45,7 +45,7 @@ class TestSchedulerIntegration(unittest.TestCase):
 
     def test_downtime_and_recovery_flow(self):
         # Simulate: UP -> DOWN -> DOWN -> UP.
-        # No real HTTP requests will be made.
+        # No real HTTP requests or emails will be sent.
         simulated_responses = [
             {
                 "status_code": 200,
@@ -84,13 +84,16 @@ class TestSchedulerIntegration(unittest.TestCase):
                 "check_website",
                 side_effect=simulated_responses,
             ) as mock_check,
+            patch.object(
+                scheduler,
+                "send_alert_email",
+            ) as mock_email,
             redirect_stdout(output),
         ):
             for index in range(4):
                 scheduler.run_due_checks()
 
-                # Simulate the configured interval passing so
-                # the next scheduled check is allowed to run.
+                # Simulate the configured interval passing.
                 if index < 3:
                     with self.TestSessionLocal() as db:
                         latest = db.scalars(
@@ -116,10 +119,10 @@ class TestSchedulerIntegration(unittest.TestCase):
 
         logs = output.getvalue()
 
-        # Verify that all four simulated checks ran.
+        # Verify all four simulated checks ran.
         self.assertEqual(mock_check.call_count, 4)
 
-        # Verify that downtime and recovery were detected.
+        # Verify downtime and recovery were each detected once.
         self.assertEqual(
             logs.count("DOWNTIME DETECTED"),
             1,
@@ -131,7 +134,24 @@ class TestSchedulerIntegration(unittest.TestCase):
             logs,
         )
 
-        # Verify that every check was saved.
+        # Verify exactly two emails were requested.
+        self.assertEqual(mock_email.call_count, 2)
+
+        # Verify the email subjects correspond to the events.
+        email_subjects = [
+            call.args[0]
+            for call in mock_email.call_args_list
+        ]
+
+        self.assertEqual(
+            email_subjects,
+            [
+                "[Sentinel] Website DOWN: Sentinel Integration Test",
+                "[Sentinel] Website RECOVERED: Sentinel Integration Test",
+            ],
+        )
+
+        # Verify every check was saved to the test database.
         with self.TestSessionLocal() as db:
             records = db.scalars(
                 select(CheckResult).where(
@@ -146,6 +166,8 @@ class TestSchedulerIntegration(unittest.TestCase):
         print("PASS: Four checks were saved.")
         print("PASS: Downtime was detected exactly once.")
         print("PASS: Recovery was detected exactly once.")
+        print("PASS: Exactly two email notifications were requested.")
+        print("PASS: No real emails were sent by this test.")
 
 
 if __name__ == "__main__":
