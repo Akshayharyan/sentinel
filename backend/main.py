@@ -52,7 +52,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "https://sentinel-frontend-kappa.vercel.app",
+        "https://sentinell-skill.vercel.app/",
     ],
     allow_credentials=True,
     allow_methods=["*"],
