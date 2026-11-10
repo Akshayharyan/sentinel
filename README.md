@@ -112,7 +112,7 @@ DATABASE_URL=postgresql+psycopg://user:password@host:5432/sentinel
 SESSION_SECRET=generate-a-long-random-secret
 
 SMTP_HOST=smtp-relay.brevo.com
-SMTP_PORT=587
+SMTP_PORT=2525
 SMTP_LOGIN=your-smtp-login
 SMTP_KEY=your-smtp-key
 ALERT_FROM_EMAIL=alerts@example.com

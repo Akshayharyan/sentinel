@@ -19,7 +19,7 @@ def send_alert_email(
     """Send a Sentinel alert email through Brevo SMTP."""
 
     host = os.getenv("SMTP_HOST", "smtp-relay.brevo.com")
-    port = int(os.getenv("SMTP_PORT", "587"))
+    port = int(os.getenv("SMTP_PORT", "2525"))
     login = os.getenv("SMTP_LOGIN")
     password = os.getenv("SMTP_KEY")
     sender = os.getenv("ALERT_FROM_EMAIL")
@@ -49,7 +49,7 @@ def send_alert_email(
     message["To"] = recipient
     message.set_content(body)
 
-    # Port 587 uses STARTTLS.
+    # Brevo supports STARTTLS on port 2525, which avoids SMTP port blocks.
     with smtplib.SMTP(host, port, timeout=20) as smtp:
         smtp.ehlo()
         smtp.starttls()
