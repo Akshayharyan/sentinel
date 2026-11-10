@@ -525,7 +525,7 @@ function App() {
           </div>
         </div>
 
-        <p className="mb-3 mt-10 text-xs uppercase tracking-widest text-slate-500">
+        <p className="mb-3 mt-10 text-xs font-medium text-slate-500">
           Workspace
         </p>
 
