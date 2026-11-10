@@ -1,5 +1,8 @@
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.PROD
+    ? 'https://sentinel-t2ya.onrender.com'
+    : 'http://localhost:8000')
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {

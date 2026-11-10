@@ -35,6 +35,7 @@ import {
   login,
   logout,
   signup,
+  API_BASE_URL,
 } from './services/api'
 
 function App() {
@@ -581,7 +582,7 @@ function App() {
           </div>
 
           <p className="mt-2 break-all text-xs leading-5 text-slate-500">
-            http://localhost:8000
+            {API_BASE_URL}
           </p>
 
           <p className="mt-2 text-xs text-slate-500">
